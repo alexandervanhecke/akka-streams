@@ -13,7 +13,10 @@ import java.nio.file.Paths
 import scala.util.{Failure, Success, Try}
 
 
-object AkkaTest extends App {
+object AkkaTest
+  extends App
+    with ExecutionSupport
+    with FileSupport {
 
   implicit val system = ActorSystem("AkkaTest")
   implicit val materializer = ActorMaterializer()
@@ -21,20 +24,6 @@ object AkkaTest extends App {
 
   val source: Source[Int, NotUsed] = Source(1 to 100)
   val numbers: Source[Int, NotUsed] = Source(0 to 100)
-
-  def lineSink(filename: String): Sink[String, Future[IOResult]] =
-    Flow[String]
-      .map(s => ByteString(s"$s\n"))
-      .toMat(FileIO.toPath(Paths.get(filename)))(Keep.right)
-
-  def doComplete[T](done: Try[T])(implicit system: ActorSystem) = done match {
-    case Success(result) =>
-      println(result)
-      system.terminate()
-    case Failure(f) =>
-      f.printStackTrace()
-      system.terminate()
-  }
 
   def example1()(implicit system: ActorSystem, materializer: Materializer, ec: ExecutionContext) = {
     val done: Future[Done] = source.runForeach(i => println(i))
@@ -64,7 +53,6 @@ object AkkaTest extends App {
       .runWith(Sink.foreach(println))
       .onComplete(doComplete[Done])
   }
-
 
   example4()
 
