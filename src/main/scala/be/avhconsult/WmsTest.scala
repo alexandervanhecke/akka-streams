@@ -149,13 +149,6 @@ object WmsTest
         writeTileFile(reqres.request.z, reqres.request.x, reqres.request.y, reqres.response, basePath)
       }
 
-//  source
-//    .take(10)
-//    .map((line: String) => line.split(";"))
-//    .map((data: Array[String]) => TileRequest(data(0).toInt, data(1).toInt, data(2).toInt, data(3).toDouble, data(4).toDouble, data(5).toDouble, data(6).toDouble))
-//    .runWith(Sink.foreach(println))
-//    .onComplete(doComplete[Done])
-
   val g = RunnableGraph.fromGraph(GraphDSL.create() { implicit builder: GraphDSL.Builder[NotUsed] =>
     import GraphDSL.Implicits._
     val in = source
@@ -166,28 +159,8 @@ object WmsTest
 
     in ~> lineToTileRequest ~> bcast.in
     for (_ <- 1 to workerCount) {
-      bcast ~> tileRequestToAnswer ~> merge
+      bcast ~> tileRequestToAnswer.async ~> merge
     }
-//    bcast.out(0) ~> tileRequestToAnswer ~> merge.in(0)
-//    bcast.out(1) ~> tileRequestToAnswer ~> merge.in(1)
-//    bcast.out(2) ~> tileRequestToAnswer ~> merge.in(2)
-//    bcast.out(3) ~> tileRequestToAnswer ~> merge.in(3)
-//    bcast.out(4) ~> tileRequestToAnswer ~> merge.in(4)
-//    bcast.out(5) ~> tileRequestToAnswer ~> merge.in(5)
-//    bcast.out(6) ~> tileRequestToAnswer ~> merge.in(6)
-//    bcast.out(7) ~> tileRequestToAnswer ~> merge.in(7)
-//    bcast.out(8) ~> tileRequestToAnswer ~> merge.in(8)
-//    bcast.out(9) ~> tileRequestToAnswer ~> merge.in(9)
-//    bcast.out(10) ~> tileRequestToAnswer ~> merge.in(10)
-//    bcast.out(11) ~> tileRequestToAnswer ~> merge.in(11)
-//    bcast.out(12) ~> tileRequestToAnswer ~> merge.in(12)
-//    bcast.out(13) ~> tileRequestToAnswer ~> merge.in(13)
-//    bcast.out(14) ~> tileRequestToAnswer ~> merge.in(14)
-//    bcast.out(15) ~> tileRequestToAnswer ~> merge.in(15)
-//    bcast.out(16) ~> tileRequestToAnswer ~> merge.in(16)
-//    bcast.out(17) ~> tileRequestToAnswer ~> merge.in(17)
-//    bcast.out(18) ~> tileRequestToAnswer ~> merge.in(18)
-//    bcast.out(19) ~> tileRequestToAnswer ~> merge.in(19)
     merge ~> writeTile ~> out
 
     ClosedShape
