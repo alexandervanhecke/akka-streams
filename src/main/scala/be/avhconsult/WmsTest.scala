@@ -21,12 +21,11 @@ object WmsTest
     with FileSupport
     with ExecutionSupport {
 
+  val workerCount = 5
+
   implicit val system = ActorSystem("AkkaTest")
   implicit val materializer = ActorMaterializer()
-  implicit val executionContext = system.dispatcher
-
-//  val source = FileIO.fromPath(Paths.get("/develop/workspace-awv/elisa-server/tools/tiles/output.csv"))
-//
+  implicit val executionContext: ExecutionContextExecutor = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(workerCount))
 
   val basePath = Paths.get("/develop/workspace-awv/elisa-server/tools/tiles")
 
@@ -34,18 +33,15 @@ object WmsTest
     .via(Framing.delimiter(ByteString("\n"), maximumFrameLength = 1024))
     .map(_.utf8String)
 
-  val workerCount = 10
-
   val httpClient = new RxHttpClient.Builder()
     .setRequestTimeout(15000)
     .setReadTimeout(10000)
     .setConnectTimeout(3000)
     .setAllowPoolingConnections(true)
     .setMaxConnections(workerCount * 5)
-    .setBaseUrl("http://apigateway:5089/geoserver/wms")
-//    .setBaseUrl("http://localhost:5089/geoserver/wms")
-    //    .setAccept("image/png8")
-    .setExecutorService(Executors.newFixedThreadPool(workerCount))
+//    .setBaseUrl("http://apigateway:5089/geoserver/wms")
+    .setBaseUrl("http://apigateway/geowebcache/service/wms")
+    .setExecutorService(Executors.newCachedThreadPool())
     .build.asScala
 
   case class TileRequest(z: Int,
@@ -63,11 +59,12 @@ object WmsTest
     Flow[String]
       .map(line => line.split(";"))
       .map(data => TileRequest(data(0).toInt, data(1).toInt, data(2).toInt, data(3).toDouble, data(4).toDouble, data(5).toDouble, data(6).toDouble))
+      .filter(request => !Files.exists(getTileFile(request, basePath)))
 
   def tileRequestToPngOrError(request: TileRequest): Future[Either[String, RequestAndResponse]] = {
     val httpRequest = httpClient.requestBuilder()
       .setMethod("GET")
-        .setUrlRelativetoBase("/")
+      .setUrlRelativetoBase("/")
       .addQueryParam("LAYERS", "ELISA")
       .addQueryParam("FORMAT", "image/png8")
       .addQueryParam("UNITS", "m")
@@ -76,7 +73,7 @@ object WmsTest
       .addQueryParam("SERVICE", "WMS")
       .addQueryParam("REQUEST", "GetMap")
       .addQueryParam("STYLES", "")
-      .addQueryParam("EXCEPTIONS", "application/vnd.ogc.se_inimage")
+      .addQueryParam("EXCEPTIONS", "application/xml")
       .addQueryParam("WIDTH", "256")
       .addQueryParam("HEIGHT", "256")
       .addQueryParam("BBOX", s"${request.xmin},${request.ymin},${request.xmax},${request.ymax}")
@@ -87,43 +84,34 @@ object WmsTest
 
     result
       .map {
-      case (200, bytebuffer) if new String(bytebuffer.array()).contains("<xml") =>
+      case (200, bytebuffer) if new String(bytebuffer.array()).contains("xml version") =>
         Left(s"Tile Request $request generated an XML value")
       case (200, bytebuffer)  =>
         Right(RequestAndResponse(request, bytebuffer.array()))
       case (statusCode, _) =>
         Left(s"received status code $statusCode")
     }
-    .recover { case f: Exception => Left(s"received a failure ${f.getMessage} for tile request $request") }
+    .recover { case f: Exception => Left(s"received a failure ${f.getMessage} for tile request $request and HTTP request $httpRequest") }
   }
 
-  def getTileFile(zoom : Int, x: Int, y: Int, baseDir: Path, tag : String = "") : Path = {
+  def getTileFile(request: TileRequest, baseDir: Path, tag : String = "") : Path = {
     val layerdir = baseDir.resolve("elisa-kaart")
-    val zdir = layerdir.resolve(zoom.toString)
-    val xdir = zdir.resolve(x.toString)
-    xdir.resolve(s"$y.png$tag")
+    val zdir = layerdir.resolve(request.z.toString)
+    val xdir = zdir.resolve(request.x.toString)
+    xdir.resolve(s"${request.y}.png$tag")
   }
 
-  def writeTileFile(zoom: Int, tileX: Int, tileY: Int, img : Array[Byte], baseDir: Path) : String = {
-    // write the tile to a temp file
-    // if the application  crashes while writing, the file wil remain in _processing
-    val fp = getTileFile(zoom, tileX, tileY, baseDir, "_processing")
-    if (Files.exists(fp)) {
-      Files.delete(fp)
-    }
-    Files.createDirectories(fp.getParent)
-    val fileWriter = new FileOutputStream(fp.toFile)
-    fileWriter.write(img)
-    fileWriter.close()
-
+  def writeTileFile(request: TileRequest, img : Array[Byte], baseDir: Path) : String = {
+    // write the tile to a temp file, if the application  crashes while writing, the file wil remain in _processing
+    val tempFile = getTileFile(request, baseDir, "_processing")
+    Files.deleteIfExists(tempFile)
+    Files.createDirectories(tempFile.getParent)
+    Files.write(tempFile, img)
     // rename the temp file (atomic operation)
-    val f = getTileFile(zoom, tileX, tileY, baseDir)
-    if (Files.exists(f)) {
-      Files.delete(f)
-    }
-    Files.move(fp, f)
+    val finalFile = getTileFile(request, baseDir)
+    Files.move(tempFile, finalFile)
 
-    s"wrote tile: $zoom $tileX $tileY ${f.toString}"
+    s"wrote tile: ${request.z} ${request.x} ${request.y} ${finalFile.toString}"
   }
 
   def treatErrors =
@@ -146,12 +134,12 @@ object WmsTest
         if (number % 100 == 0) {
           println(s"processed $number lines")
         }
-        writeTileFile(reqres.request.z, reqres.request.x, reqres.request.y, reqres.response, basePath)
+        writeTileFile(reqres.request, reqres.response, basePath)
       }
 
   val g = RunnableGraph.fromGraph(GraphDSL.create() { implicit builder: GraphDSL.Builder[NotUsed] =>
     import GraphDSL.Implicits._
-    val in = source
+    val in = source.async
     val out = lineSink("/develop/workspace-awv/elisa-server/tools/tiles/output-flow.txt")
 
     val bcast = builder.add(Balance[TileRequest](workerCount))
